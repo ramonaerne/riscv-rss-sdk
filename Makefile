@@ -201,10 +201,30 @@ sim: $(fw_jump) $(spike)
 	$(spike) --isa=$(ISA) -p4 --kernel $(linux_image) $(fw_jump)
 .PHONY: qemu
 qemu: $(qemu) $(fw_jump)
-	$(qemu) -nographic -machine virt -m 256M -bios $(fw_jump) -kernel $(linux_image) \
+	$(qemu) -d guest_errors -nographic -machine virt -m 256M -bios $(fw_jump) -kernel $(linux_image) \
 		-netdev user,id=net0 -device virtio-net-device,netdev=net0
 else ifeq ($(BL),bbl)
 .PHONY: sim
 sim: $(bbl) $(spike)
 	$(spike) --isa=$(ISA) -p4 $(bbl)
 endif
+
+.PHONY: qemu-spike
+qemu-spike: $(qemu)
+	$(qemu) -nographic -machine spike -m 256M -bios $(fw_jump) -kernel $(linux_image) \
+	-append "root=/dev/ram rw console=hvc0 earlycon=sbi"
+
+./spike-plugin/host-devmem/host-devmem: ./spike-plugin/host-devmem/host_devmem.c
+	make -C spike-plugin/host-devmem
+
+host-devmem: ./spike-plugin/host-devmem/host-devmem
+	./spike-plugin/host-devmem/host-devmem
+
+spike-plugin/example_c/plugin.so:
+	make -C spike-plugin/example_c
+
+spike-plugin/plugin_test/plugin_test:
+	make -C spike-plugin/plugin_test
+
+spike-plugin: spike-plugin/example_c/plugin.so spike-plugin/plugin_test/plugin_test
+	$(spike) -m1 --extlib=spike-plugin/example_c/plugin.so --device=test_mmio_plugin,0x10000000,argument spike-plugin/plugin_test/plugin_test

@@ -16,3 +16,7 @@
 [submodule "opensbi"]
 	path = repo/opensbi
 	url = https://github.com/riscv-software-src/opensbi
+[submodule "qemu"]
+	path = repo/qemu
+	branch = axelera/feature/triton-mem
+	url = git@github.com:axelera-ai/experimental.qemu.git

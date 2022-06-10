@@ -45,7 +45,7 @@ spike_srcdir := $(srcdir)/riscv-isa-sim
 spike_wrkdir := $(wrkdir)/riscv-isa-sim
 spike := $(toolchain_dest)/bin/spike
 
-qemu_srcdir := $(srcdir)/riscv-gnu-toolchain/qemu
+qemu_srcdir := $(srcdir)/qemu
 qemu_wrkdir := $(wrkdir)/qemu
 qemu :=  $(toolchain_dest)/bin/qemu-system-riscv64
 

@@ -60,6 +60,8 @@ qemu :=  $(toolchain_dest)/bin/qemu-system-riscv64
 target_linux  := riscv64-unknown-linux-gnu
 target_newlib := riscv64-unknown-elf
 
+linux-app := linux-app/hello_world
+
 .PHONY: all
 all: sim
 build: $(fw_jump) $(qemu) $(spike)
@@ -180,6 +182,11 @@ $(fw_jump): $(opensbi_srcdir) $(linux_image) $(RISCV)/bin/$(target_linux)-gcc
 	mkdir -p $(opensbi_wrkdir)
 	$(MAKE) -C $(opensbi_srcdir) FW_PAYLOAD_PATH=$(linux_image) PLATFORM=generic O=$(opensbi_wrkdir) CROSS_COMPILE=riscv64-unknown-linux-gnu-
 
+# example linux app that can be added to the initramfs
+$(linux-app): linux-app/hello_world.c
+	# notice that since busybox is statically linked only statically linked binaries will work
+	cd linux-app && riscv64-unknown-linux-gnu-gcc -static -o hello_world hello_world.c
+
 # $(busybox_wrkdir)/.config: $(busybox_defconfig) $(busybox_srcdir) $(RISCV)/bin/$(target_linux)-gcc
 $(busybox_wrkdir)/.config: $(busybox_defconfig) $(busybox_srcdir)
 	mkdir -p $(busybox_wrkdir)
@@ -190,15 +197,13 @@ $(busybox): $(busybox_srcdir) $(busybox_wrkdir)/.config $(RISCV)/bin/$(target_li
 	make -C $(busybox_srcdir) O=$(busybox_wrkdir) -j$(nproc)
 	make -C $(busybox_srcdir) O=$(busybox_wrkdir) install
 
-$(busybox_initramfs): $(busybox) $(initscript)
+$(busybox_initramfs): $(busybox) $(initscript) $(linux-app)
 	[ -d $(busybox_initramfs_dir) ] && rm -r $(busybox_initramfs_dir)
 	mkdir -p $(busybox_initramfs_dir)
 	cd $(busybox_initramfs_dir) && mkdir -p bin sbin etc proc sys usr/bin usr/sbin
 	cp -a $(busybox)/* $(busybox_initramfs_dir)
 	cp $(initscript) $(busybox_initramfs_dir)/init
-	cp $(wrkdir)/../linux-bin-test/hello_world $(busybox_initramfs_dir)/bin/
-	# cp $(confdir)/initramfs.txt $(busybox_initramfs_dir)/init
-	# cp -a $(buildroot_initramfs_sysroot)/* $(busybox_initramfs_dir)
+	cp $(linux-app) $(busybox_initramfs_dir)/bin/
 	chmod +x $(busybox_initramfs_dir)/init
 	cd $(busybox_initramfs_dir) && find . -print0 | cpio --null -ov --format=newc | gzip -9 > $@
 
@@ -271,3 +276,4 @@ spike-plugin/plugin_test/plugin_test:
 
 spike-plugin: spike-plugin/example_c/plugin.so spike-plugin/plugin_test/plugin_test
 	$(spike) -m1 --extlib=spike-plugin/example_c/plugin.so --device=test_mmio_plugin,0x10000000,argument spike-plugin/plugin_test/plugin_test
+

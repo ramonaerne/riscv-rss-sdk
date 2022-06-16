@@ -24,6 +24,14 @@ buildroot_initramfs_config := $(confdir)/buildroot_initramfs_config
 buildroot_initramfs_sysroot_stamp := $(wrkdir)/.buildroot_initramfs_sysroot
 buildroot_initramfs_sysroot := $(wrkdir)/buildroot_initramfs_sysroot
 
+busybox_srcdir := $(srcdir)/busybox
+busybox_wrkdir := $(wrkdir)/busybox
+busybox := $(busybox_wrkdir)/_install
+busybox_initramfs_dir := $(wrkdir)/initramfs
+busybox_initramfs := $(wrkdir)/initramfs.cpio.gz
+initscript := $(confdir)/init
+busybox_defconfig := $(confdir)/busybox_defconfig
+
 linux_srcdir := $(srcdir)/linux
 linux_wrkdir := $(wrkdir)/linux
 linux_defconfig := $(confdir)/linux_defconfig
@@ -54,6 +62,7 @@ target_newlib := riscv64-unknown-elf
 
 .PHONY: all
 all: sim
+build: $(fw_jump) $(qemu) $(spike)
 
 newlib: $(RISCV)/bin/$(target_newlib)-gcc
 
@@ -73,6 +82,8 @@ $(toolchain_dest)/bin/$(target_linux)-gcc: $(toolchain_srcdir)
 	$(MAKE) -C $(toolchain_wrkdir) linux
 	# sed 's/^#define LINUX_VERSION_CODE.*/#define LINUX_VERSION_CODE 329226/' -i $(toolchain_dest)/sysroot/usr/include/linux/version.h
 
+toolchain: $(toolchain_dest)/bin/$(target_linux)-gcc
+
 $(toolchain_dest)/bin/$(target_newlib)-gcc: $(toolchain_srcdir)
 	mkdir -p $(toolchain_wrkdir)
 	cd $(toolchain_wrkdir); $(toolchain_srcdir)/configure \
@@ -87,7 +98,7 @@ $(buildroot_initramfs_wrkdir)/.config: $(buildroot_srcdir)
 	$(MAKE) -C $< RISCV=$(RISCV) PATH="$(PATH)" O=$(buildroot_initramfs_wrkdir) olddefconfig CROSS_COMPILE=riscv64-unknown-linux-gnu-
 
 $(buildroot_initramfs_tar): $(buildroot_srcdir) $(buildroot_initramfs_wrkdir)/.config $(RISCV)/bin/$(target_linux)-gcc $(buildroot_initramfs_config)
-	$(MAKE) -C $< RISCV=$(RISCV) PATH="$(PATH)" O=$(buildroot_initramfs_wrkdir)
+	$(MAKE) -C $< RISCV=$(RISCV) PATH="$(PATH)" O=$(buildroot_initramfs_wrkdir) -j$(nproc)
 
 .PHONY: buildroot_initramfs-menuconfig
 buildroot_initramfs-menuconfig: $(buildroot_initramfs_wrkdir)/.config $(buildroot_srcdir)
@@ -99,7 +110,7 @@ $(buildroot_initramfs_sysroot): $(buildroot_initramfs_tar)
 	mkdir -p $(buildroot_initramfs_sysroot)
 	tar -xpf $< -C $(buildroot_initramfs_sysroot) --exclude ./dev --exclude ./usr/share/locale
 
-$(linux_wrkdir)/.config: $(linux_defconfig) $(linux_srcdir)
+$(linux_wrkdir)/.config: $(linux_defconfig) $(linux_srcdir) toolchain
 	mkdir -p $(dir $@)
 	cp -p $< $@
 	$(MAKE) -C $(linux_srcdir) O=$(linux_wrkdir) ARCH=riscv CROSS_COMPILE=riscv64-unknown-linux-gnu- olddefconfig
@@ -115,15 +126,22 @@ ifeq ($(ISA),$(filter rv32%,$(ISA)))
 	$(MAKE) -C $(linux_srcdir) O=$(linux_wrkdir) ARCH=riscv CROSS_COMPILE=riscv64-unknown-linux-gnu- olddefconfig
 endif
 
-$(vmlinux): $(linux_srcdir) $(linux_wrkdir)/.config $(buildroot_initramfs_sysroot) 
+# $(vmlinux): $(linux_srcdir) $(linux_wrkdir)/.config $(buildroot_initramfs_sysroot) 
+# 	$(MAKE) -C $< O=$(linux_wrkdir) \
+# 		CONFIG_INITRAMFS_SOURCE="$(confdir)/initramfs.txt $(buildroot_initramfs_sysroot)" \
+# 		CONFIG_INITRAMFS_ROOT_UID=$(shell id -u) \
+# 		CONFIG_INITRAMFS_ROOT_GID=$(shell id -g) \
+# 		CROSS_COMPILE=riscv64-unknown-linux-gnu- \
+# 		ARCH=riscv \
+# 		KBUILD_CFLAGS_KERNEL="-save-temps=obj" \
+# 		all -j$(nproc)
+
+$(vmlinux): $(linux_srcdir) $(linux_wrkdir)/.config
 	$(MAKE) -C $< O=$(linux_wrkdir) \
-		CONFIG_INITRAMFS_SOURCE="$(confdir)/initramfs.txt $(buildroot_initramfs_sysroot)" \
-		CONFIG_INITRAMFS_ROOT_UID=$(shell id -u) \
-		CONFIG_INITRAMFS_ROOT_GID=$(shell id -g) \
 		CROSS_COMPILE=riscv64-unknown-linux-gnu- \
 		ARCH=riscv \
 		KBUILD_CFLAGS_KERNEL="-save-temps=obj" \
-		all
+		all -j$(nproc)
 
 $(vmlinux_stripped): $(vmlinux)
 	$(target_linux)-strip -o $@ $<
@@ -162,13 +180,37 @@ $(fw_jump): $(opensbi_srcdir) $(linux_image) $(RISCV)/bin/$(target_linux)-gcc
 	mkdir -p $(opensbi_wrkdir)
 	$(MAKE) -C $(opensbi_srcdir) FW_PAYLOAD_PATH=$(linux_image) PLATFORM=generic O=$(opensbi_wrkdir) CROSS_COMPILE=riscv64-unknown-linux-gnu-
 
+# $(busybox_wrkdir)/.config: $(busybox_defconfig) $(busybox_srcdir) $(RISCV)/bin/$(target_linux)-gcc
+$(busybox_wrkdir)/.config: $(busybox_defconfig) $(busybox_srcdir)
+	mkdir -p $(busybox_wrkdir)
+	cp -p $< $@
+	make -C $(busybox_srcdir) O=$(busybox_wrkdir) oldconfig
+
+$(busybox): $(busybox_srcdir) $(busybox_wrkdir)/.config $(RISCV)/bin/$(target_linux)-gcc
+	make -C $(busybox_srcdir) O=$(busybox_wrkdir) -j$(nproc)
+	make -C $(busybox_srcdir) O=$(busybox_wrkdir) install
+
+$(busybox_initramfs): $(busybox) $(initscript)
+	[ -d $(busybox_initramfs_dir) ] && rm -r $(busybox_initramfs_dir)
+	mkdir -p $(busybox_initramfs_dir)
+	cd $(busybox_initramfs_dir) && mkdir -p bin sbin etc proc sys usr/bin usr/sbin
+	cp -a $(busybox)/* $(busybox_initramfs_dir)
+	cp $(initscript) $(busybox_initramfs_dir)/init
+	cp $(wrkdir)/../linux-bin-test/hello_world $(busybox_initramfs_dir)/bin/
+	# cp $(confdir)/initramfs.txt $(busybox_initramfs_dir)/init
+	# cp -a $(buildroot_initramfs_sysroot)/* $(busybox_initramfs_dir)
+	chmod +x $(busybox_initramfs_dir)/init
+	cd $(busybox_initramfs_dir) && find . -print0 | cpio --null -ov --format=newc | gzip -9 > $@
+
+busybox-initramfs: $(busybox_initramfs)
+
 $(spike): $(spike_srcdir) 
 	rm -rf $(spike_wrkdir)
 	mkdir -p $(spike_wrkdir)
 	mkdir -p $(dir $@)
 	cd $(spike_wrkdir) && $</configure \
 		--prefix=$(dir $(abspath $(dir $@))) 
-	$(MAKE) -C $(spike_wrkdir)
+	$(MAKE) -C $(spike_wrkdir) -j$(nproc)
 	$(MAKE) -C $(spike_wrkdir) install
 	touch -c $@
 
@@ -178,18 +220,19 @@ $(qemu): $(qemu_srcdir)
 	mkdir -p $(dir $@)
 	cd $(qemu_wrkdir) && $</configure \
 		--disable-docs \
+		--disable-tests \
 		--prefix=$(dir $(abspath $(dir $@))) \
 		--target-list=riscv64-linux-user,riscv64-softmmu
-	$(MAKE) -C $(qemu_wrkdir)
+	$(MAKE) -C $(qemu_wrkdir) -j$(nproc)
 	$(MAKE) -C $(qemu_wrkdir) install
 	touch -c $@
 
-
-.PHONY: buildroot_initramfs_sysroot vmlinux bbl fw_jump
+.PHONY: buildroot_initramfs_sysroot vmlinux bbl fw_jump busybox
 buildroot_initramfs_sysroot: $(buildroot_initramfs_sysroot)
 vmlinux: $(vmlinux)
 bbl: $(bbl)
 fw_image: $(fw_jump)
+busybox: $(busybox)
 
 .PHONY: clean
 clean:
@@ -200,9 +243,9 @@ ifeq ($(BL),opensbi)
 sim: $(fw_jump) $(spike)
 	$(spike) --isa=$(ISA) -p4 --kernel $(linux_image) $(fw_jump)
 .PHONY: qemu
-qemu: $(qemu) $(fw_jump)
+qemu: $(qemu) $(fw_jump) $(busybox_initramfs)
 	$(qemu) -d guest_errors -nographic -machine virt -m 256M -bios $(fw_jump) -kernel $(linux_image) \
-		-netdev user,id=net0 -device virtio-net-device,netdev=net0
+	-initrd $(busybox_initramfs) -append "console=ttyS0"
 else ifeq ($(BL),bbl)
 .PHONY: sim
 sim: $(bbl) $(spike)

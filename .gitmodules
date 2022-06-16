@@ -20,3 +20,6 @@
 	path = repo/qemu
 	branch = axelera/feature/triton-mem
 	url = git@github.com:axelera-ai/experimental.qemu.git
+[submodule "busybox"]
+	path = repo/busybox
+	url = https://github.com/mirror/busybox.git
